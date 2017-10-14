@@ -11,6 +11,7 @@ import theano
 import theano.tensor as T
 from theano.tensor.signal import pool
 from theano.tensor.nnet import conv2d
+from theano.tensor.nnet.bn import batch_normalization
 
 
 class LeNetConvPoolLayer(object):
@@ -40,8 +41,19 @@ class LeNetConvPoolLayer(object):
         self.b = theano.shared(b_value, name = 'b', borrow  = True)
         
         #self.output = T.nnet.relu(pooled_out + self.b.dimshuffle('x', 0, 'x', 'x'))
-        self.output = T.tanh(pooled_out + self.b.dimshuffle('x', 0, 'x','x')  )      
-        self.params = [self.W, self.b]
+        
+        self.linear = pooled_out + self.b.dimshuffle('x', 0, 'x','x')
+        self.gamma = theano.shared(value = numpy.ones((filter_shape[0],), dtype=theano.config.floatX), name='gamma')
+        self.beta = theano.shared(value = numpy.zeros((filter_shape[0],), dtype=theano.config.floatX), name='beta')
+        self.linear_shuffle = self.linear.dimshuffle(0, 2, 3, 1)        
+        self.linear_res = self.linear_shuffle.reshape( (self.linear.shape[0]*self.linear.shape[2]*self.linear.shape[3],  self.linear.shape[1]))
+        bn_output = batch_normalization(inputs = self.linear_res,
+			gamma = self.gamma, beta = self.beta, mean = self.linear_res.mean((0,), keepdims=True),
+			std = T.std(self.linear_res, axis=0), mode='high_mem')
+                
+        self.output = T.tanh( bn_output.reshape( self.linear_shuffle.shape  ).dimshuffle(0, 3, 1, 2) )
+        #self.output = T.tanh(pooled_out + self.b.dimshuffle('x', 0, 'x','x')  )      
+        self.params = [self.W, self.b, self.gamma, self.beta]
 
 class HiddenLayer(object):
     def __init__(self, rng, input, n_in, n_out, activation=T.tanh):
@@ -55,8 +67,14 @@ class HiddenLayer(object):
         self.b = theano.shared(b_value, name = 'b', borrow = True)
         
         lin_out = T.dot(input, self.W) + self.b
-        self.p_y_given_x = activation(lin_out)
-        self.params = [self.W, self.b]
+        self.gamma = theano.shared(value = numpy.ones((n_out,), dtype=theano.config.floatX), name='gamma')
+        self.beta = theano.shared(value = numpy.zeros((n_out,), dtype=theano.config.floatX), name='beta')
+        bn_output = batch_normalization(inputs = lin_out,
+			gamma = self.gamma, beta = self.beta, mean = lin_out.mean((0,), keepdims=True),
+			std = T.std(lin_out, axis=0), mode='high_mem')
+        self.p_y_given_x = activation(bn_output)
+        #self.p_y_given_x = activation(lin_out)
+        self.params = [self.W, self.b, self.gamma, self.beta]
 #
 class OutputLayer(HiddenLayer):
     def __init__(self, rng, input, n_in, n_out, activation):
