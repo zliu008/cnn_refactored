@@ -17,6 +17,7 @@ import theano
 import theano.tensor as T
 from cnn import LeNets
 
+sys.setrecursionlimit(10000)
 def load_data(dataset):
     ''' Loads the dataset
 
@@ -98,7 +99,7 @@ def load_data(dataset):
     return rval
 
 
-def evaluate_lenet5(learning_rate=0.1, n_epochs=200,
+def evaluate_lenet5(learning_rate=0.4, n_epochs=200,
                     dataset='mnist.pkl.gz',
                     nkerns=[20, 50], batch_size=500):
     """ Demonstrates lenet on MNIST dataset
@@ -224,12 +225,13 @@ def evaluate_lenet5(learning_rate=0.1, n_epochs=200,
     print('Best validation score of %f %% obtained at iteration %i, '
           'with test performance %f %%' %
           (best_validation_loss * 100., best_iter + 1, test_score * 100.))
-    f = open('trained_model.save', 'wb')
+    f = open('trained_model_incep.save', 'wb')
     pickle.dump(cnn_model, f, protocol=pickle.HIGHEST_PROTOCOL)   
     f.close()
+    return cnn_model
     
-    #f = open("ex9.4.dat", "rb")
-    #trained_cnn = pickle.load('trained_model.save', 'rb')
+    #f = open("trained_model.save", "rb")
+    #trained_cnn = pickle.load(f)
     
     
     print(('The code for file ' +
@@ -237,4 +239,4 @@ def evaluate_lenet5(learning_rate=0.1, n_epochs=200,
            ' ran for %.2fm' % ((end_time - start_time) / 60.)), file=sys.stderr)
 
 if __name__ == '__main__':
-    evaluate_lenet5()
+    model = evaluate_lenet5()

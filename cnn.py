@@ -1,103 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-Created on Sun Jan 22 16:37:20 2017
+Created on Sat Oct 14 14:49:52 2017
 
 @author: zaoliu
 """
-
-import numpy
-
 import theano
 import theano.tensor as T
 from theano.tensor.signal import pool
-from theano.tensor.nnet import conv2d
-from theano.tensor.nnet.bn import batch_normalization
+from cnn_util import LeNetConvLayer, SoftMaxOutputLayer
 
 
-class LeNetConvPoolLayer(object):
-    def __init__(self, rng, input, filter_shape, 
-                 image_shape, poolsize=(2, 2)):
-        assert image_shape[1] == filter_shape[1]
-        self.input = input
-        # there are "num input feature maps * filter height * filter width"
-        # inputs to each hidden unit
-        fan_in = numpy.prod(filter_shape[1:])
-        # each unit in the lower layer receives a gradient from:
-        # "num output feature maps * filter height * filter width" /
-        #   pooling size
-        fan_out = (filter_shape[0] * numpy.prod(filter_shape[2:]) //
-                   numpy.prod(poolsize))
-        W_bound = numpy.sqrt(2. /(fan_in + fan_out))
-        W_value = rng.normal(loc = 0., scale = W_bound, size = filter_shape)
-        self.W = theano.shared(W_value, name = 'W', borrow = True)
-        conv_out = conv2d(input = self.input, 
-                   filters = self.W)        
-        
-        pooled_out = pool.pool_2d(input = conv_out, 
-                                  ds=poolsize, ignore_border=True)                            
-        
-        b_bound = numpy.sqrt(2. /fan_out)
-        b_value = rng.normal(loc = 0, scale = b_bound, size=(filter_shape[0],))
-        self.b = theano.shared(b_value, name = 'b', borrow  = True)
-        
-        #self.output = T.nnet.relu(pooled_out + self.b.dimshuffle('x', 0, 'x', 'x'))
-        
-        self.linear = pooled_out + self.b.dimshuffle('x', 0, 'x','x')
-        self.gamma = theano.shared(value = numpy.ones((filter_shape[0],), dtype=theano.config.floatX), name='gamma')
-        self.beta = theano.shared(value = numpy.zeros((filter_shape[0],), dtype=theano.config.floatX), name='beta')
-        self.linear_shuffle = self.linear.dimshuffle(0, 2, 3, 1)        
-        self.linear_res = self.linear_shuffle.reshape( (self.linear.shape[0]*self.linear.shape[2]*self.linear.shape[3],  self.linear.shape[1]))
-        bn_output = batch_normalization(inputs = self.linear_res,
-			gamma = self.gamma, beta = self.beta, mean = self.linear_res.mean((0,), keepdims=True),
-			std = T.std(self.linear_res, axis=0), mode='high_mem')
-                
-        self.output = T.tanh( bn_output.reshape( self.linear_shuffle.shape  ).dimshuffle(0, 3, 1, 2) )
-        #self.output = T.tanh(pooled_out + self.b.dimshuffle('x', 0, 'x','x')  )      
-        self.params = [self.W, self.b, self.gamma, self.beta]
 
-class HiddenLayer(object):
-    def __init__(self, rng, input, n_in, n_out, activation=T.tanh):
-        self.input = input
-        W_bound = numpy.sqrt( 2. /(n_in + n_out))
-        W_value = rng.normal(0., W_bound, (n_in, n_out))
-        self.W = theano.shared(W_value, name = 'W', borrow = True)
-        
-        b_bound = numpy.sqrt( 2. / n_out)
-        b_value = rng.normal(loc = 0., scale = b_bound, size=(n_out,))
-        self.b = theano.shared(b_value, name = 'b', borrow = True)
-        
-        lin_out = T.dot(input, self.W) + self.b
-        self.gamma = theano.shared(value = numpy.ones((n_out,), dtype=theano.config.floatX), name='gamma')
-        self.beta = theano.shared(value = numpy.zeros((n_out,), dtype=theano.config.floatX), name='beta')
-        bn_output = batch_normalization(inputs = lin_out,
-			gamma = self.gamma, beta = self.beta, mean = lin_out.mean((0,), keepdims=True),
-			std = T.std(lin_out, axis=0), mode='high_mem')
-        self.p_y_given_x = activation(bn_output)
-        #self.p_y_given_x = activation(lin_out)
-        self.params = [self.W, self.b, self.gamma, self.beta]
-#
-class OutputLayer(HiddenLayer):
-    def __init__(self, rng, input, n_in, n_out, activation):
-        HiddenLayer.__init__(self, rng, input, n_in, n_out, activation)
-        self.y_pred =  T.argmax(self.p_y_given_x, axis=1)
-    
-    def negative_log_likelihood(self, y):
-        cost = -T.mean(T.log(self.p_y_given_x)[T.arange(y.shape[0]), y])
-        return cost
-    def errors(self, y):
-        # check if y has same dimension of y_pred
-        if y.ndim != self.y_pred.ndim:
-            raise TypeError(
-                'y should have the same shape as self.y_pred',
-                ('y', y.type, 'y_pred', self.y_pred.type)
-            )
-        else:
-            return T.mean(T.neq(self.y_pred, y))
-    
-        
 class LeNets(object):
-    def __init__(self, rng, batch_size=500, nkerns=[20, 50], 
-                         each_imag_shape = (28, 28), poolsize=(2, 2),
+    def __init__(self, rng, batch_size=500, nkerns=[20, 50, 70], poolsize=(2,2),
+                         each_imag_shape = (28, 28),
                          fH = 5, fW = 5):
         self.batch_size = batch_size
     
@@ -107,51 +23,109 @@ class LeNets(object):
                             # [int] labels 
         
         img_shape_l1 = (batch_size, ) + (1,) + each_imag_shape
-        conv_pool_l1_in = self.x.reshape( img_shape_l1 )
-        self.conv_pool_l1 =  LeNetConvPoolLayer(
+        conv_l1_in = self.x.reshape( img_shape_l1 )
+        self.conv_l1 =  LeNetConvLayer(
                         rng = rng,
-                        input = conv_pool_l1_in,
+                        input = conv_l1_in,
                         image_shape = img_shape_l1,
                         filter_shape = (nkerns[0], 1, fH, fW),
-                        poolsize= poolsize                   
                         )
+        img_shape_convl1_out = (batch_size,) + (nkerns[0],) \
+        + ((each_imag_shape[0] - fH + 1),  \
+           (each_imag_shape[0] - fW + 1))
+
+        pooled_out_l1 = pool.pool_2d(input = self.conv_l1.output,
+                                  ds=poolsize, ignore_border=True)                                   
         
         img_shape_l2 = (batch_size,) + (nkerns[0],) \
-        + ((each_imag_shape[0] - fH + 1)/poolsize[0],  
-           (each_imag_shape[0] - fW + 1)/poolsize[1])
-        self.conv_pool_l2 =  LeNetConvPoolLayer(
+        + (img_shape_convl1_out[2]/poolsize[0], img_shape_convl1_out[3]/poolsize[1])
+        
+        self.conv_l2 = LeNetConvLayer(   
                         rng = rng,
-                        input = self.conv_pool_l1.output,
+                        input = pooled_out_l1,
                         image_shape = img_shape_l2,
-                        filter_shape = (nkerns[1], nkerns[0], fH, fW),
-                        poolsize= poolsize                   
+                        filter_shape = (nkerns[1], nkerns[0], fH, fW)                 
                         )
-        # the HiddenLayer being fully-connected, it operates on 2D matrices of
-        # shape (batch_size, num_pixels) (i.e matrix of rasterized images).
-        # This will generate a matrix of shape (batch_size, nkerns[1] * 4 * 4),
-        # or (500, 50 * 4 * 4) = (500, 800) with the default values.
-        #conv_pool_l2.output was (500, 50, 4, 4)
-        hid_input = self.conv_pool_l2.output.flatten(2)    
-        self.hid_layer = HiddenLayer(
-            rng,
-            input = hid_input,
-            n_in = nkerns[1] * (img_shape_l2[2] - fH + 1)/2 * (img_shape_l2[3] - fW + 1)/2,
-            n_out = 500
+        img_shape_convl2_out = (batch_size,) + (nkerns[1],) \
+        + ((img_shape_l2[2] - fH + 1),  \
+           (img_shape_l2[3] - fW + 1))
+        
+         #simple inception, 5x5 convolution + 1x1 convolution // max pool + 1x1 convolution
+        self.conv_l3 = LeNetConvLayer(   
+                        rng = rng,
+                        input = self.conv_l2.output,
+                        image_shape = img_shape_convl2_out,
+                        filter_shape = (nkerns[2], nkerns[1], fH, fW)                 
+                        )
+        
+        pooled_l3 = pool.pool_2d(input = self.conv_l2.output,
+                                  ds=poolsize, ignore_border=True)   
+        #1x1 convolution                                  
+        self.conv_l3_1 = LeNetConvLayer(   
+                rng = rng,
+                input = self.conv_l3.output,
+                image_shape = (batch_size, nkerns[2],img_shape_convl2_out[2] - fH + 1, \
+                img_shape_convl2_out[3] - fW + 1),
+                #filter_shape = (nkerns[2]/2, nkerns[2], 1, 1) 
+                filter_shape = (nkerns[1]/2, nkerns[2], 1, 1)     # make output map number nkerns[1]/2                  
+                )
+        self.conv_l3_2 = LeNetConvLayer(   
+                rng = rng,
+                input = pooled_l3,
+                image_shape = (batch_size, nkerns[1],img_shape_convl2_out[2]/2, \
+                img_shape_convl2_out[3]/2),
+                filter_shape = (nkerns[1]/2, nkerns[1], 1, 1)                 
+                )
+                                  
+        inceptOut1 = T.concatenate([self.conv_l3_1.output, self.conv_l3_2.output], axis = 1)                         
+        
+        img_shape_l3 = (batch_size,) + (nkerns[1],) \
+        + (img_shape_convl2_out[2]/poolsize[0], img_shape_convl2_out[3]/poolsize[1])                
+                                               
+        #simple inception, 3x3 convolution + 1x1 convolution // max poole + 1x1 convolution
+        self.conv_l4 = LeNetConvLayer(   
+                        rng = rng,
+                        input = inceptOut1,
+                        image_shape = img_shape_l3,
+                        filter_shape = (nkerns[2], nkerns[1], 3, 3)                 
+                        )
+        pool_l4 =  pool.pool_2d(input = inceptOut1, ds = (2,2),
+                        ignore_border = True, mode = 'average_exc_pad')  
+                
+        #1x1 convolution
+        self.conv_l4_1 = LeNetConvLayer(   
+                rng = rng,
+                input = self.conv_l4.output,
+                image_shape = (batch_size, nkerns[2],2,2),
+                filter_shape = (6, nkerns[2], 1, 1)                 
+                )
+        self.conv_l4_2 = LeNetConvLayer(   
+                rng = rng,
+                input = pool_l4,
+                image_shape = (batch_size, nkerns[1],2,2),
+                filter_shape = (4, nkerns[1], 1, 1)                 
+                )
+        
+        inceptOut2 = T.concatenate([self.conv_l4_1.output, self.conv_l4_2.output], axis = 1) 
+        
+        avgPool = pool.pool_2d(input = inceptOut2, ds = (2,2),
+                        ignore_border = True, mode = 'average_exc_pad')
+        self.out_layer = SoftMaxOutputLayer(
+            input = avgPool.flatten(2),
+            n_in = 10, 
+            n_out = 10
         )
         
-        self.out_layer = OutputLayer(
-            rng,
-            input = self.hid_layer.p_y_given_x, 
-            n_in = 500, 
-            n_out = 10, 
-            activation = T.nnet.softmax
-        )
-        
-        self.L1 = T.sum(T.abs_(self.conv_pool_l1.W)) + \
-                 T.sum(T.abs_(self.conv_pool_l2.W)) + \
-                 T.sum(T.abs_(self.hid_layer.W)) + \
-                 T.sum(T.abs_(self.out_layer.W))
-                 
+        self.L1 = T.sum(T.abs_(self.conv_l1.W)) + \
+                 T.sum(T.abs_(self.conv_l2.W)) + \
+                 T.sum(T.abs_(self.conv_l3.W)) +\
+                 T.sum(T.abs_(self.conv_l3_1.W)) +\
+                 T.sum(T.abs_(self.conv_l3_2.W)) +\
+                 T.sum(T.abs_(self.conv_l4.W)) +\
+                 T.sum(T.abs_(self.conv_l4_1.W)) +\
+                 T.sum(T.abs_(self.conv_l4_2.W))
+            
+            
     def cnn_setup_test(self, data_set_x, data_set_y, learning_rate=0.1):
 
         index = T.lscalar()  
@@ -206,8 +180,9 @@ class LeNets(object):
                L1Reg * self.L1
     
         # create a list of all model parameters to be fit by gradient descent
-        self.params = self.out_layer.params + self.hid_layer.params \
-        + self.conv_pool_l2.params + self.conv_pool_l1.params
+        self.params = self.conv_l4_2.params + self.conv_l4_1.params + self.conv_l4.params \
+        + self.conv_l3.params + self.conv_l3_1.params + self.conv_l3_2.params\
+        + self.conv_l2.params + self.conv_l1.params
     
         # create a list of gradients for all model parameters
         grads = T.grad(cost, self.params)
@@ -234,5 +209,3 @@ class LeNets(object):
     def cnn_run_train(self, index):
         cost = self.train_model(index)
         return cost
-        
-        
